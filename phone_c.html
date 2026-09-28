@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardian AI - Phone C Receiver</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; font-family:Arial,sans-serif; }
+        body { min-height:100vh; background:#0b1120; color:#f8fafc; display:flex; justify-content:center; align-items:center; padding:20px; }
+        .container { width:100%; max-width:440px; background:#111c30; border:1px solid #263650; border-radius:20px; padding:25px; box-shadow:0 15px 40px rgba(0,0,0,.3); }
+        .header { text-align:center; margin-bottom:25px; }
+        .logo { width:65px; height:65px; background:#e53935; border-radius:18px; display:flex; align-items:center; justify-content:center; margin:0 auto 15px; font-size:30px; }
+        h1 { font-size:25px; margin-bottom:8px; }
+        .subtitle { color:#94a3b8; font-size:14px; }
+        .status { background:#17283e; border:1px solid #2b405c; border-radius:12px; padding:15px; margin-bottom:22px; }
+        .status-title { font-size:13px; color:#94a3b8; margin-bottom:8px; }
+        .status-value { color:#fbbf24; font-size:14px; font-weight:bold; overflow-wrap:anywhere; }
+        .section-title { font-size:15px; margin-bottom:10px; }
+        .incoming-panel { width:100%; min-height:110px; background:#0b1425; border:1px solid #30425d; border-radius:12px; padding:14px; margin-bottom:15px; }
+        .waiting { color:#94a3b8; font-size:14px; line-height:1.6; }
+        .sos-card { background:#17283e; border:1px solid #334967; border-radius:12px; padding:14px; }
+        .sos-heading { color:#fca5a5; font-size:16px; font-weight:700; margin-bottom:13px; }
+        .sos-fields { display:grid; grid-template-columns:1fr; gap:9px; }
+        .sos-field { background:#102037; border:1px solid #2b405c; border-radius:9px; padding:10px 11px; min-width:0; }
+        .sos-label { display:block; color:#94a3b8; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+        .sos-value { color:#e2e8f0; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+        .map-link { display:flex; justify-content:center; align-items:center; gap:8px; width:100%; margin-top:13px; padding:12px; background:#0284c7; color:white; text-decoration:none; border-radius:9px; font-weight:700; font-size:14px; }
+        .map-link:hover { background:#0369a1; }
+        .plain-message { color:#cbd5e1; font-size:14px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+        button { width:100%; padding:14px; border:0; border-radius:10px; font-size:15px; font-weight:bold; cursor:pointer; margin-bottom:12px; transition:.2s; }
+        button:disabled { opacity:.55; cursor:not-allowed; }
+        .connect-btn { background:#0284c7; color:white; }
+        .connect-btn:hover { background:#0369a1; }
+        .simulate-btn { background:#e53935; color:white; }
+        .simulate-btn:hover { background:#c62828; }
+        .clear-btn { background:#24344d; color:#dbeafe; }
+        .clear-btn:hover { background:#334967; }
+        .message-box { display:none; background:#17283e; border:1px solid #334967; border-radius:12px; padding:16px; margin-top:12px; overflow-wrap:anywhere; }
+        .message-box h3 { color:#4ade80; font-size:16px; margin-bottom:12px; }
+        .message-box p { color:#cbd5e1; font-size:14px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+        .warning { margin-top:20px; padding:12px; background:#2a2415; border:1px solid #66501e; border-radius:10px; color:#fcd34d; font-size:12px; line-height:1.6; text-align:center; }
+        .footer { text-align:center; color:#64748b; font-size:12px; margin-top:20px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div class="logo">🛡️</div>
+        <h1>Guardian AI</h1>
+        <p class="subtitle">Phone C — Receiver</p>
+    </div>
+
+    <div class="status">
+        <div class="status-title">Device Status</div>
+        <div class="status-value" id="deviceStatus">● Not connected to Phone B</div>
+    </div>
+
+    <button class="connect-btn" id="connectBtn" onclick="connectToPhoneB()">Connect to Phone B</button>
+    <button class="clear-btn" id="disconnectBtn" onclick="disconnectFromPhoneB()" disabled>Disconnect Bluetooth</button>
+
+    <h3 class="section-title">Incoming Emergency Message</h3>
+    <div class="incoming-panel" id="incomingPanel">
+        <div class="waiting">Waiting for a complete SOS message from Phone B...</div>
+    </div>
+
+    <button class="simulate-btn" onclick="simulateSOS()">Simulate Forwarded SOS</button>
+    <button class="clear-btn" onclick="clearMessage()">Clear Message</button>
+
+    <div class="message-box" id="messageBox">
+        <h3 id="messageTitle">✓ SOS Received</h3>
+        <p id="receivedMessage"></p>
+    </div>
+
+    <div class="warning">
+        ⚠️ DEMO MODE<br>
+        Live reception requires Phone B to forward messages through the B0A2 BLE notification characteristic. The simulation button only displays a local test message.
+    </div>
+    <div class="footer">Guardian AI • Emergency Safety Network</div>
+</div>
+
+<script>
+    const SERVICE_UUID = "0000bafe-0000-1000-8000-00805f9b34fb";
+    const NOTIFY_UUID = "0000b0a2-0000-1000-8000-00805f9b34fb";
+    let bleDevice = null;
+    let bleCharacteristic = null;
+    let packetParts = [];
+    let expectedParts = 0;
+
+    async function connectToPhoneB() {
+        const status = document.getElementById("deviceStatus");
+        const connectBtn = document.getElementById("connectBtn");
+        const disconnectBtn = document.getElementById("disconnectBtn");
+        try {
+            if (!navigator.bluetooth) {
+                alert("Web Bluetooth is unavailable. Please use a compatible version of Chrome.");
+                return;
+            }
+            resetAssembly();
+            status.textContent = "● Searching for Phone B...";
+            status.style.color = "#fbbf24";
+            connectBtn.disabled = true;
+
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ services: [SERVICE_UUID] }]
+            });
+            bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
+
+            status.textContent = "● Connecting to Phone B...";
+            const server = await bleDevice.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            bleCharacteristic = await service.getCharacteristic(NOTIFY_UUID);
+            await bleCharacteristic.startNotifications();
+            bleCharacteristic.addEventListener("characteristicvaluechanged", handleIncomingPacket);
+
+            status.textContent = "● Connected to Phone B — Waiting for SOS";
+            status.style.color = "#4ade80";
+            connectBtn.textContent = "Connected to Phone B";
+            disconnectBtn.disabled = false;
+        } catch (error) {
+            console.error("Bluetooth connection error:", error);
+            status.textContent = "● Bluetooth connection failed";
+            status.style.color = "#ef4444";
+            connectBtn.disabled = false;
+            connectBtn.textContent = "Connect to Phone B";
+            alert("Bluetooth error: " + error.message);
+        }
+    }
+
+    // Reassembly state: framed packets from Phone B use "NNNN/NNNN|" + payload.
+    let frameParts = new Map();
+    let frameTotal = 0;
+    let rawBuffer = "";
+    let frameTimer = null;
+    let lastFrameAt = 0;
+
+    function resetAssembly() {
+        frameParts = new Map();
+        frameTotal = 0;
+        rawBuffer = "";
+        lastFrameAt = 0;
+        if (frameTimer) {
+            clearTimeout(frameTimer);
+            frameTimer = null;
+        }
+    }
+
+    function setStatus(message, color = "#4ade80") {
+        const status = document.getElementById("deviceStatus");
+        status.textContent = "● " + message;
+        status.style.color = color;
+    }
+
+    function handleIncomingPacket(event) {
+        const view = event.target.value;
+        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+        if (!bytes.length) return;
+
+        // Phone B sends packets as: NNNN/NNNN| + payload.
+        // Read the header only up to the first pipe, rather than assuming a
+        // fixed byte count, so this also accepts shorter sequence numbers.
+        const prefix = new TextDecoder("ascii").decode(bytes.slice(0, Math.min(bytes.length, 20)));
+        const pipeAt = prefix.indexOf("|");
+        const headerText = pipeAt >= 0 ? prefix.slice(0, pipeAt + 1) : "";
+        const match = headerText.match(/^(\d{1,4})\/(\d{1,4})\|$/);
+
+        if (match) {
+            const seq = Number(match[1]);
+            const total = Number(match[2]);
+            const headerLength = pipeAt + 1;
+            if (!seq || !total || seq > total || total > 9999 || headerLength >= bytes.length) return;
+
+            const now = Date.now();
+            // Start a clean assembly when a new first packet arrives, or when
+            // the total changes. Do not mix packets with a different total.
+            if (seq === 1 && (frameTotal === 0 || frameTotal !== total || frameParts.has(1))) {
+                frameParts = new Map();
+                frameTotal = total;
+            } else if (frameTotal !== total) {
+                // A non-first packet can arrive before packet 1; retain it as
+                // a partial assembly, but never combine different totals.
+                frameParts = new Map();
+                frameTotal = total;
+            }
+
+            frameParts.set(seq, bytes.slice(headerLength));
+            lastFrameAt = now;
+            setStatus(`Receiving SOS from Phone B (${frameParts.size}/${frameTotal} packets)`, "#fbbf24");
+
+            if (frameTimer) clearTimeout(frameTimer);
+            frameTimer = setTimeout(() => {
+                if (frameTotal && frameParts.size < frameTotal) {
+                    const missing = [];
+                    for (let i = 1; i <= frameTotal; i++) if (!frameParts.has(i)) missing.push(i);
+                    setStatus(`Incomplete SOS: ${missing.length} packet(s) missing. Keep Phone C connected and resend.`, "#fbbf24");
+                }
+            }, 4000);
+
+            if (frameParts.size === frameTotal) {
+                const chunks = [];
+                for (let i = 1; i <= frameTotal; i++) {
+                    if (!frameParts.has(i)) return;
+                    chunks.push(frameParts.get(i));
+                }
+                const totalSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+                const joined = new Uint8Array(totalSize);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    joined.set(chunk, offset);
+                    offset += chunk.length;
+                }
+                const completeText = new TextDecoder("utf-8", { fatal: false }).decode(joined).trim();
+                resetAssembly();
+                processCompleteMessage(completeText);
+            }
+            return;
+        }
+
+        // Legacy/raw mode: accumulate fragments, but never render an individual
+        // fragment. Only a complete JSON object is allowed to reach the UI.
+        const fragment = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+        rawBuffer += fragment;
+        setStatus("Receiving message from Phone B — assembling…", "#fbbf24");
+
+        const complete = extractCompleteJson(rawBuffer);
+        if (complete) {
+            rawBuffer = rawBuffer.slice(complete.end).trim();
+            processCompleteMessage(complete.json);
+            return;
+        }
+
+        if (frameTimer) clearTimeout(frameTimer);
+        frameTimer = setTimeout(() => {
+            if (rawBuffer.trim()) {
+                setStatus("SOS not complete: Phone B did not deliver the full message. Resend after reconnecting.", "#fbbf24");
+                // Keep the buffer for subsequent fragments; do not show partial text.
+            }
+        }, 4000);
+    }
+
+    function extractCompleteJson(text) {
+        const start = text.indexOf("{");
+        if (start < 0) return null;
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let i = start; i < text.length; i++) {
+            const ch = text[i];
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch === "\\") escaped = true;
+                else if (ch === '"') inString = false;
+                continue;
+            }
+            if (ch === '"') inString = true;
+            else if (ch === "{") depth++;
+            else if (ch === "}") {
+                depth--;
+                if (depth === 0) {
+                    return { json: text.slice(start, i + 1), end: i + 1 };
+                }
+            }
+        }
+        return null;
+    }
+
+    function escapeHTML(value) {
+        return String(value ?? "Not available")
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function formatSOSDate(value) {
+        if (value === undefined || value === null || value === "") return "Not available";
+        const n = Number(value);
+        const d = new Date(n < 1000000000000 ? n * 1000 : n);
+        return Number.isNaN(d.getTime()) ? "Not available" : d.toLocaleString();
+    }
+
+    function processCompleteMessage(message) {
+        if (!message || !String(message).trim()) return;
+        let data;
+        try {
+            data = JSON.parse(message);
+        } catch (error) {
+            setStatus("Received data is not complete valid JSON; waiting for a clean resend.", "#fbbf24");
+            return;
+        }
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+            showPlainMessage(message, "✓ Message Received from Phone B");
+            return;
+        }
+        showSOSCard(data);
+    }
+
+    function showSOSCard(data) {
+        const lat = data.latitude ?? data.lat ?? null;
+        const lon = data.longitude ?? data.lon ?? data.lng ?? null;
+        const validCoords = lat !== null && lon !== null &&
+            Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) &&
+            Number(lat) >= -90 && Number(lat) <= 90 &&
+            Number(lon) >= -180 && Number(lon) <= 180;
+
+        let mapUrl = validCoords
+            ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat + "," + lon)}`
+            : "";
+        if (typeof data.location_link === "string" &&
+            /^https:\/\/www\.google\.com\/maps\//i.test(data.location_link)) {
+            mapUrl = data.location_link.replace(/&amp;/g, "&");
+        }
+
+        const fields = [
+            ["Message ID", data.message_id],
+            ["Emergency Type", data.emergency_type],
+            ["Source Device", data.source_device_id],
+            ["Forwarded By", data.forwarding_device_id],
+            ["Reported By", data.from],
+            ["Location", validCoords ? `${lat}, ${lon}` : "Not available"],
+            ["Speed", data.speed == null ? "Not available" : `${data.speed} m/s`],
+            ["Time", formatSOSDate(data.timestamp)]
+        ];
+
+        const fieldHtml = fields.map(([label, value]) => `
+            <div class="sos-field">
+                <span class="sos-label">${escapeHTML(label)}</span>
+                <div class="sos-value">${escapeHTML(value ?? "Not available")}</div>
+            </div>`).join("");
+
+        document.getElementById("incomingPanel").innerHTML = `
+            <div class="sos-card">
+                <div class="sos-heading">🚨 Emergency SOS</div>
+                <div class="sos-fields">${fieldHtml}</div>
+                ${mapUrl ? `<a class="map-link" href="${escapeHTML(mapUrl)}" target="_blank" rel="noopener noreferrer">📍 Open Location in Google Maps</a>` : ""}
+            </div>`;
+        document.getElementById("receivedMessage").textContent = fields
+            .map(([label, value]) => `${label}: ${value ?? "Not available"}`).join("\n");
+        document.getElementById("messageTitle").textContent = "✓ Complete SOS Received from Phone B";
+        document.getElementById("messageBox").style.display = "block";
+        setStatus("Complete SOS received from Phone B");
+    }
+
+    function showPlainMessage(message, title) {
+        document.getElementById("incomingPanel").innerHTML =
+            `<div class="plain-message">${escapeHTML(message)}</div>`;
+        document.getElementById("receivedMessage").textContent = message;
+        document.getElementById("messageTitle").textContent = title;
+        document.getElementById("messageBox").style.display = "block";
+        setStatus("Complete message received from Phone B");
+    }
+
+    function onDisconnected() {
+        const status = document.getElementById("deviceStatus");
+        const connectBtn = document.getElementById("connectBtn");
+        document.getElementById("disconnectBtn").disabled = true;
+        connectBtn.disabled = false;
+        connectBtn.textContent = "Connect to Phone B";
+        status.textContent = "● Disconnected from Phone B";
+        status.style.color = "#fbbf24";
+        bleCharacteristic = null;
+        packetParts = [];
+        expectedParts = 0;
+        resetAssembly();
+    }
+
+    function disconnectFromPhoneB() {
+        if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
+            bleDevice.gatt.disconnect();
+        } else {
+            onDisconnected();
+        }
+    }
+
+    function simulateSOS() {
+        showSOSCard({
+            message_id: "SOS-DEMO-" + Date.now(),
+            source_device_id: "DEMO_DEVICE",
+            forwarding_device_id: "PHONE_B",
+            latitude: 20.9374,
+            longitude: 77.7796,
+            emergency_type: "GENERAL",
+            from: "GuardianAI_Demo",
+            speed: 0,
+            timestamp: Math.floor(Date.now() / 1000)
+        });
+        setStatus("Demo SOS displayed locally — not sent over Bluetooth", "#fbbf24");
+    }
+
+    function clearMessage() {
+        document.getElementById("incomingPanel").innerHTML =
+            '<div class="waiting">Waiting for a complete SOS message from Phone B...</div>';
+        document.getElementById("messageBox").style.display = "none";
+        resetAssembly();
+        if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
+            setStatus("Connected to Phone B — Waiting for SOS");
+        } else {
+            setStatus("Not connected to Phone B", "#fbbf24");
+        }
+    }
+</script>
+</body>
+</html>
